@@ -1,2 +1,4 @@
-# quick_join
-PingCAP作业：从两个csv文件，构建一个快速的join算法
+# Go-Internal
+
+This repo is used to record some impressive code implementation in my learning way —— Arenatlx
+

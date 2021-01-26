@@ -2,8 +2,8 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
-	"github.com/pkg/errors"
 	"io"
 	"os"
 	"strconv"
@@ -23,7 +23,7 @@ import (
  * 估算来看100w行，差不多是8MB大小的文件，1000w是80MB大小的文件
  * partition的时候，每个routine，分读1MB大小的页面进行hash表的
  * 创建
-*/
+ */
 
 type bucket struct {
 	chain  []int
@@ -58,12 +58,12 @@ var partitionHashTable = NewHashTable()
 func main() {
 	tstart := time.Now()
 	//load table info
-	table1, err := loadInfoFromCSV(1, "t11.csv")
-	if err != err {
+	table1, err := loadInfoFromCSV(1, "./quick-join/t1.csv")
+	if err != nil {
 		return
 	}
-	table2, err := loadInfoFromCSV(2, "t22.csv")
-	if err != err {
+	table2, err := loadInfoFromCSV(2, "./quick-join/t2.csv")
+	if err != nil {
 		return
 	}
 
@@ -77,8 +77,8 @@ func main() {
 	//fmt.Println(table2)
 
 	/*
-     *  scan phase，看成是scan节点
-     */
+	 *  scan phase，看成是scan节点
+	 */
 	//根据table的size，小于一个1MB的，我们还是顺序读
 	//if int64(tab.size) > goroutineSize{     //todo
 
@@ -124,14 +124,13 @@ func main() {
 
 	/*
 	 * Agg phase, 这个携程看成是Agg节点，从4个channel接受4个probe worker送来的流水数据
-	*/
+	 */
 
 	streams := make([]chan int, 4)
 	for i := 0; i < 4; i++ {
 		streams[i] = make(chan int, 15) //为每个chan设置100的缓冲
 	}
 	var count int = 0
-
 
 	fmt.Println("probe start")
 	/*
@@ -192,11 +191,9 @@ func main() {
 	}()
 	wg.Wait()
 
-
-
 	/*
-	  * show agg result
-	*/
+	 * show agg result
+	 */
 	fmt.Println(count)
 	fmt.Println("time duration", time.Since(tstart))
 
@@ -206,13 +203,13 @@ func main() {
  * 死锁的原因是需要检测，chan的关闭，特别是Agg1和Agg2
  */
 
-func AggNode1(stream chan int, res chan int){
+func AggNode1(stream chan int, res chan int) {
 	var pCount int = 0
 	var off bool = false
-	for{
+	for {
 		select {
-		case _, ok:=<-stream:
-			if !ok{
+		case _, ok := <-stream:
+			if !ok {
 				//channel 关闭
 				off = true
 				break
@@ -224,19 +221,19 @@ func AggNode1(stream chan int, res chan int){
 		}
 	}
 	fmt.Println("pCount= ", pCount)
-	res<-pCount
+	res <- pCount
 }
 
-func AggNode2(res chan int, count *int){
+func AggNode2(res chan int, count *int) {
 	var ans int = 0
 	var off bool = false
-	for i:=0; i<4; i++{   //循环四次接受结果
+	for i := 0; i < 4; i++ { //循环四次接受结果
 		select {
-		case one, ok:=<-res:
-			if !ok{
+		case one, ok := <-res:
+			if !ok {
 				off = true
 				break
-			}else{
+			} else {
 				fmt.Println("get res")
 				ans += one
 			}
@@ -345,7 +342,7 @@ func partitionHashMap(data1 *[]data, start, end int) {
 
 //way1：IO并行，可以提升速度
 func (tab *table) concurrentRead(wg sync.WaitGroup) {
-	size := int64(tab.size/4)
+	size := int64(tab.size / 4)
 	wg.Add(10)
 	rows := make([]chan data, 5)
 	// concurrent read goroutines
@@ -393,25 +390,25 @@ func (tab *table) concurrentRead(wg sync.WaitGroup) {
 	wg.Wait()
 }
 
-func partitionBuild(row chan data){
+func partitionBuild(row chan data) {
 	var off bool = false
-	for{
+	for {
 		select {
-		case r, ok:=<-row:
-			if !ok{
+		case r, ok := <-row:
+			if !ok {
 				off = true
 				break
-			}else{
+			} else {
 				buildRow(r.a, r.b)
 			}
 		}
-		if off{
+		if off {
 			break
 		}
 	}
 }
 
-func buildRow(key, val int){
+func buildRow(key, val int) {
 	partitionHashTable.rwlock.RLock()
 	buck, ok := partitionHashTable.table[key]
 	if ok { //bucket添加元素，互斥锁
@@ -439,34 +436,34 @@ func buildRow(key, val int){
 	}
 }
 
-func partitionRead(tab *table, row chan data, logicalOffset int64) error{
-	physicalOffset, err:= tab.getPhysicalOffset(logicalOffset)
-	if err!=nil{
+func partitionRead(tab *table, row chan data, logicalOffset int64) error {
+	physicalOffset, err := tab.getPhysicalOffset(logicalOffset)
+	if err != nil {
 		fmt.Println("random read err")
 		return errors.New("random read err")
 	}
 	//in readAtOffset func defined the reading size
 	datas, err := tab.readAtOffset(physicalOffset)
-	if err!=nil{
+	if err != nil {
 		return err
 	}
 	str := string(datas[:])
 	res := strings.FieldsFunc(str, func(r rune) bool {
 		return !(r >= '0' && r <= '9')
 	})
-	if len(res)%2!=0{
+	if len(res)%2 != 0 {
 		fmt.Println("解析的数据不为偶数，有问题")
 		return errors.New("解析的数据不为偶数，有问题")
 	}
 	strLen := len(res)
-	for i:=0; i<strLen; i+=2 {
+	for i := 0; i < strLen; i += 2 {
 		a, err1 := strconv.Atoi(res[i])
 		b, err2 := strconv.Atoi(res[i+1])
 		if err1 != nil || err2 != nil {
 			fmt.Println("解析失败，包含非法字符")
 			return errors.New("解析失败，包含非法字符")
 		}
-		r := data{a,b}
+		r := data{a, b}
 		/*
 		 * way1：
 		 * dataBuf = append(dataBuf, row)
@@ -476,8 +473,8 @@ func partitionRead(tab *table, row chan data, logicalOffset int64) error{
 		/*
 		 * 直接将row扔到管道里面，扔给上层routine
 		 */
-		 row <- r
-		 fmt.Println("put a row")
+		row <- r
+		fmt.Println("put a row")
 	}
 	return nil
 }
@@ -513,15 +510,15 @@ func (tab *table) getPhysicalOffset(offset int64) (pOffset int64, err error) {
 	}
 	if nowBuf[0] != '\n' {
 		return 0, errors.New("read fail in next")
-	} else{
+	} else {
 		return offset + 1, nil
 	}
 }
 
-func (tab *table) readAtOffset(offset int64) (*[]byte, error) {
+func (tab *table) readAtOffset(offset int64) ([]byte, error) {
 	//get real size of file remaining
 	//size := goroutineSize
-	size := int64(tab.size/4)
+	size := int64(tab.size / 4)
 	if (tab.finfo.Size() - offset) < size {
 		size = tab.finfo.Size() - offset
 	}
@@ -531,7 +528,7 @@ func (tab *table) readAtOffset(offset int64) (*[]byte, error) {
 		return nil, errors.New("read fail in real read")
 	}
 	if routinueBuf[size-1] == '\n' {
-		return &routinueBuf, nil
+		return routinueBuf, nil
 	}
 	//如果没有读到文件换行，需要增加读，否则元组不完整
 	appendBuf := make([]byte, 1)
@@ -542,10 +539,8 @@ func (tab *table) readAtOffset(offset int64) (*[]byte, error) {
 	if appendBuf[0] != '\n' {
 		return nil, errors.New("read fail in real read")
 	}
-	return &routinueBuf, nil
+	return routinueBuf, nil
 }
-
-
 
 //way2：IO串行，但是build的时候，可以起worker来并行
 func (tab *table) sequentialRead() (*[]data, error) {
